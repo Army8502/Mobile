@@ -167,7 +167,7 @@ end)
 --// ATTRIBUTE TOGGLE UI
 local function createGunToggleRow(labelText, defaultState, callback)
     local rowFrame = Instance.new("Frame")
-    rowFrame.Size = UDim2.new(0, 180, 0, 30) -- ปรับความสูงเป็น 40
+    rowFrame.Size = UDim2.new(0, 180, 0, 30)
     rowFrame.BackgroundTransparency = 1
 
     local label = Instance.new("TextLabel", rowFrame)
@@ -181,16 +181,16 @@ local function createGunToggleRow(labelText, defaultState, callback)
     label.TextXAlignment = Enum.TextXAlignment.Left
 
     local toggleButton = Instance.new("TextButton", rowFrame)
-    toggleButton.Size = UDim2.new(0, 20, 0, 20)
-    toggleButton.Position = UDim2.new(1, -40, 0.5, -10) -- ปรับระยะห่างขวา
+    toggleButton.Size = UDim2.new(0, 25, 0, 25)
+    toggleButton.Position = UDim2.new(1, -35, 0.5, -12)
     styleButton(toggleButton)
-    toggleButton.TextSize = 14
+    toggleButton.TextSize = 20
     toggleButton.Text = ""  -- Start with empty text
 
     local state = defaultState
     toggleButton.MouseButton1Click:Connect(function()
         state = not state
-        toggleButton.Text = state and "" or "●"
+        toggleButton.Text = state and "" or "●"  -- Toggle between empty and filled circle
         callback(state)
         LocalPlayer:SetAttribute(labelText .. "Enabled", state)
     end)
@@ -339,24 +339,3 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
         fovCircle:Remove()
     end
 end)
-
--- เพิ่มปุ่มอิโมจิที่มุมซ้ายบน
-local toggleEmojiBtn = Instance.new("TextButton", screenGui)
-toggleEmojiBtn.Size = UDim2.new(0, 30, 0, 30)
-toggleEmojiBtn.Position = UDim2.new(0, 20, 0, 20)
-toggleEmojiBtn.Text = "😊"  -- ใช้ Emoji หรือข้อความที่ต้องการ
-styleButton(toggleEmojiBtn)
-toggleEmojiBtn.TextSize = 20
-
--- ตัวแปรเพื่อเก็บสถานะการแสดงผลของ UI
-local uiVisible = true
-
--- ฟังก์ชั่นที่ทำให้ UI ซ่อนและแสดง
-local function toggleUI()
-    uiVisible = not uiVisible
-    frame.Visible = uiVisible  -- ซ่อนหรือแสดง UI หลัก
-    newFrame.Visible = uiVisible  -- ซ่อนหรือแสดง UI ใหม่
-end
-
--- เชื่อมโยงฟังก์ชั่นกับการกดปุ่มอิโมจิ
-toggleEmojiBtn.MouseButton1Click:Connect(toggleUI)
