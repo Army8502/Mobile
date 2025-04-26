@@ -339,3 +339,33 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
         fovCircle:Remove()
     end
 end)
+
+local toggleImageBtn = Instance.new("ImageButton", screenGui)
+toggleImageBtn.Size = UDim2.new(0, 30, 0, 30)  -- ขนาดเหมือนเดิม
+toggleImageBtn.Position = UDim2.new(0, 20, 0, 20)  -- ตำแหน่งเหมือนเดิม
+toggleImageBtn.Image = "rbxassetid://118284077656202"  -- ใช้ Asset ID ที่คุณอัปโหลด
+toggleImageBtn.BackgroundTransparency = 1  -- ลบพื้นหลังออก
+
+-- เอาความโปร่งใสออกจากรูปภาพ
+toggleImageBtn.ImageTransparency = 0  -- 0 คือไม่โปร่งใส
+
+-- เพิ่มกรอบสีดำรอบรูปภาพ
+toggleImageBtn.BorderSizePixel = 2  -- ขนาดของกรอบ
+toggleImageBtn.BorderColor3 = Color3.fromRGB(0, 0, 0)  -- สีกรอบเป็นสีดำ
+
+-- เพิ่มขอบโค้งให้กับปุ่ม
+local corner = Instance.new("UICorner", toggleImageBtn)
+corner.CornerRadius = UDim.new(0, 6)  -- ขอบโค้ง
+
+-- ตัวแปรเพื่อเก็บสถานะการแสดงผลของ UI
+local uiVisible = true
+
+-- ฟังก์ชั่นที่ทำให้ UI ซ่อนและแสดง
+local function toggleUI()
+    uiVisible = not uiVisible
+    frame.Visible = uiVisible  -- ซ่อนหรือแสดง UI หลัก
+    newFrame.Visible = uiVisible  -- ซ่อนหรือแสดง UI ใหม่
+end
+
+-- เชื่อมโยงฟังก์ชั่นกับการกดปุ่มภาพ
+toggleImageBtn.MouseButton1Click:Connect(toggleUI)
