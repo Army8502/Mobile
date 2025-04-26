@@ -1,420 +1,299 @@
---// SERVICES
+-- Services
 local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local LocalPlayer = Players.LocalPlayer
-local camera = workspace.CurrentCamera
 local UserInputService = game:GetService("UserInputService")
 
---// VARIABLES
-local fovEnabled = false
-local fovRadius = 150
-local fovCircle = Drawing.new("Circle")
-fovCircle.Visible = false
-fovCircle.Color = Color3.fromRGB(0, 255, 0)
-fovCircle.Thickness = 1
-fovCircle.NumSides = 64
-fovCircle.Filled = false
-
---// UI SETUP
+-- UI Setup
 local screenGui = Instance.new("ScreenGui", game.CoreGui)
-screenGui.Name = "FOV_UI"
+screenGui.Name = "BackpackViewer"
 
--- ปรับขนาดและตำแหน่งของ UI ให้ติดขอบซ้ายมากขึ้น
-local frame = Instance.new("Frame", screenGui)
-frame.Size = UDim2.new(0, 150, 0, 170)  -- ขนาดของ UI โดยใช้ offset
-frame.Position = UDim2.new(0, 20, 0.25, 0)  -- ใช้ scale สำหรับตำแหน่งที่ติดขอบซ้าย (X = 0) และ Y ใช้ scale สำหรับตั้งระยะจากขอบบน
-frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
-frame.BorderSizePixel = 0
--- Styling
-local corner = Instance.new("UICorner", frame)
-corner.CornerRadius = UDim.new(0, 10)
+local mainFrame = Instance.new("Frame", screenGui)
+mainFrame.Size = UDim2.new(0, 180, 0, 140)
+mainFrame.Position = UDim2.new(0, 20, 0, 65)
+mainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+mainFrame.BorderSizePixel = 0
+mainFrame.AnchorPoint = Vector2.new(0, 0)
 
-local stroke = Instance.new("UIStroke", frame)
-stroke.Color = Color3.fromRGB(70, 70, 70)
-stroke.Thickness = 1.2
-stroke.Transparency = 0.3
+-- Rounded corners for mainFrame
+local mainCorner = Instance.new("UICorner", mainFrame)
+mainCorner.CornerRadius = UDim.new(0, 12)
 
-local function styleButton(btn)
-	btn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-	btn.TextColor3 = Color3.new(1, 1, 1)
-	btn.Font = Enum.Font.SourceSansBold
-	btn.BorderSizePixel = 0
+-- Title
+local title = Instance.new("TextLabel", mainFrame)
+title.Size = UDim2.new(1, 0, 0, 30)
+title.Position = UDim2.new(0, 0, 0, 0)
+title.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
+title.BorderSizePixel = 0
+title.Text = "🎒 Backpack "
+title.TextColor3 = Color3.fromRGB(230, 230, 230)
+title.TextSize = 14
+title.Font = Enum.Font.SourceSansBold
 
-	local btnCorner = Instance.new("UICorner", btn)
-	btnCorner.CornerRadius = UDim.new(0, 6)
+-- Rounded corners for title
+local titleCorner = Instance.new("UICorner", title)
+titleCorner.CornerRadius = UDim.new(0, 12)
+
+-- List frame
+local listFrame = Instance.new("ScrollingFrame", mainFrame)
+listFrame.Size = UDim2.new(1, -20, 1, -46)
+listFrame.Position = UDim2.new(0, 10, 0, 46)
+listFrame.BackgroundTransparency = 1
+listFrame.BorderSizePixel = 0
+listFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+listFrame.ScrollBarThickness = 6
+
+local listLayout = Instance.new("UIListLayout", listFrame)
+listLayout.SortOrder = Enum.SortOrder.LayoutOrder
+listLayout.Padding = UDim.new(0, 6)
+
+-- Mini UI variables
+local miniFrame
+local isMinimized = false
+
+-- Debounce setup
+local lastUpdateTime = 0
+local UPDATE_INTERVAL = 0.5  -- seconds
+
+-- Count items in a backpack (excluding "Fists")
+local function countBackpackItems(backpack)
+    local cnt = 0
+    for _, item in ipairs(backpack:GetChildren()) do
+        if item:IsA("Tool") and item.Name ~= "Fists" then
+            cnt += 1
+        end
+    end
+    return cnt
 end
 
-local toggleBtn = Instance.new("TextButton", frame)
-toggleBtn.Size = UDim2.new(0, 140, 0, 27)  -- ขนาดปุ่ม
-toggleBtn.Position = UDim2.new(0.05, 0, 0.05, 0)  -- ใช้ scale สำหรับตำแหน่ง
-toggleBtn.Text = "FOV: OFF"
-styleButton(toggleBtn)
-toggleBtn.TextSize = 12
+-- Emoji Map for specific items
+local emojiMap = {
+    -- Weapons
+    ["M24"] = "🦌",
+    ["Energy Bar Max"] = "🍫⚡"
+}
 
-local sizeLabel = Instance.new("TextLabel", frame)
-sizeLabel.Size = UDim2.new(0, 50, 0, 10)
-sizeLabel.Position = UDim2.new(0.05, 0, 0.25, 0)
-sizeLabel.Text = "Radius: " .. fovRadius
-sizeLabel.BackgroundTransparency = 1
-sizeLabel.TextColor3 = Color3.new(1, 1, 1)
-sizeLabel.Font = Enum.Font.SourceSans
-sizeLabel.TextSize = 12
+-- Show a player's backpack items in a curved UI
+local activeBackpackUI
+local function showBackpack(player)
+    if activeBackpackUI then
+        activeBackpackUI:Destroy()
+        activeBackpackUI = nil
+        return
+    end
 
-local plusBtn = Instance.new("TextButton", frame)
-plusBtn.Size = UDim2.new(0, 16, 0, 16)
-plusBtn.Position = UDim2.new(0.55, 0, 0.25, 0)  -- ตำแหน่ง relative กับ frame
-plusBtn.Text = "+"
-styleButton(plusBtn)
-plusBtn.TextSize = 14
+    local frame = Instance.new("Frame", screenGui)
+    frame.Size = UDim2.new(0, 160, 0, 140)
+    frame.Position = UDim2.new(0,
+        mainFrame.AbsolutePosition.X + mainFrame.AbsoluteSize.X + 12,
+        0,
+        mainFrame.AbsolutePosition.Y
+    )
+    frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+    frame.BorderSizePixel = 0
 
-local minusBtn = Instance.new("TextButton", frame)
-minusBtn.Size = UDim2.new(0, 18, 0, 18)
-minusBtn.Position = UDim2.new(0.70, 0, 0.25, 0)
-minusBtn.Text = "-"
-styleButton(minusBtn)
-minusBtn.TextSize = 14
+    local frameCorner = Instance.new("UICorner", frame)
+    frameCorner.CornerRadius = UDim.new(0, 12)
 
---// BUTTON FUNCTIONS
-toggleBtn.MouseButton1Click:Connect(function()
-	fovEnabled = not fovEnabled
-	toggleBtn.Text = fovEnabled and "FOV: ON" or "FOV: OFF"
-	fovCircle.Visible = fovEnabled
-end)
+    local titleBar = Instance.new("Frame", frame)
+    titleBar.Size = UDim2.new(1, 0, 0, 30)
+    titleBar.Position = UDim2.new(0, 0, 0, 0)
+    titleBar.BackgroundColor3 = Color3.fromRGB(65, 65, 65)
+    titleBar.BorderSizePixel = 0
 
-plusBtn.MouseButton1Click:Connect(function()
-	fovRadius = math.clamp(fovRadius + 10, 50, 400)
-	sizeLabel.Text = "Radius: " .. fovRadius
-	fovCircle.Radius = fovRadius
-end)
+    local titleBarCorner = Instance.new("UICorner", titleBar)
+    titleBarCorner.CornerRadius = UDim.new(0, 12)
 
-minusBtn.MouseButton1Click:Connect(function()
-	fovRadius = math.clamp(fovRadius - 10, 50, 400)
-	sizeLabel.Text = "Radius: " .. fovRadius
-	fovCircle.Radius = fovRadius
-end)
+    local titleText = Instance.new("TextLabel", titleBar)
+    titleText.Size = UDim2.new(1, -40, 1, 0)
+    titleText.Position = UDim2.new(0, 12, 0, 0)
+    titleText.BackgroundTransparency = 1
+    titleText.Text = "🎒 " .. player.Name .. ""
+    titleText.TextColor3 = Color3.fromRGB(240, 240, 240)
+    titleText.Font = Enum.Font.SourceSansBold
+    titleText.TextSize = 16
+    titleText.TextXAlignment = Enum.TextXAlignment.Left
 
---// FUNCTION: Lock Target
-local function getClosestVisiblePlayer()
-	local closestPlayer = nil
-	local closestDist = fovRadius
-	local maxLockDistance = 150
+    local closeBtn = Instance.new("TextButton", titleBar)
+    closeBtn.Size = UDim2.new(0, 24, 0, 24)
+    closeBtn.Position = UDim2.new(1, -32, 0, 4)
+    closeBtn.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
+    closeBtn.BorderSizePixel = 0
+    closeBtn.Text = "X"
+    closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    closeBtn.Font = Enum.Font.SourceSansBold
+    closeBtn.TextSize = 18
+    
+    local closeCorner = Instance.new("UICorner", closeBtn)
+    closeCorner.CornerRadius = UDim.new(0, 6)
 
-	for _, player in ipairs(Players:GetPlayers()) do
-		if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("Head") then
-			local head = player.Character.Head
-			local headPos = head.Position
-			local screenPoint, onScreen = camera:WorldToViewportPoint(headPos)
-			local distanceToPlayer = (headPos - camera.CFrame.Position).Magnitude
-
-			if onScreen and distanceToPlayer <= maxLockDistance then
-				local rayParams = RaycastParams.new()
-				rayParams.FilterType = Enum.RaycastFilterType.Blacklist
-				rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
-				rayParams.IgnoreWater = true
-
-				local rayResult = workspace:Raycast(camera.CFrame.Position, (headPos - camera.CFrame.Position).Unit * distanceToPlayer, rayParams)
-
-				if not rayResult or rayResult.Instance:IsDescendantOf(player.Character) then
-					local distOnScreen = (Vector2.new(screenPoint.X, screenPoint.Y) - Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)).Magnitude
-					if distOnScreen < closestDist then
-						closestDist = distOnScreen
-						closestPlayer = player
-					end
-				end
-			end
-		end
-	end
-
-	return closestPlayer
-end
-
---// MAIN LOOP
-RunService.RenderStepped:Connect(function()
-	local center = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
-	fovCircle.Position = center
-	fovCircle.Radius = fovRadius
-
-	if fovEnabled then
-		local target = getClosestVisiblePlayer()
-		if target and target.Character and target.Character:FindFirstChild("Head") then
-			local targetPos = target.Character.Head.Position
-			local camPos = camera.CFrame.Position
-			local direction = (targetPos - camPos).Unit
-			camera.CFrame = CFrame.new(camPos, camPos + direction)
-		end
-	end
-end)
-
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-	if gameProcessed then return end
-	if input.KeyCode == Enum.KeyCode.B then
-		fovEnabled = not fovEnabled
-		toggleBtn.Text = fovEnabled and "FOV: ON" or "FOV: OFF"
-		fovCircle.Visible = fovEnabled
-	end
-end)
-
---// UI Toggle
-local uiVisible = true
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-	if gameProcessed then return end
-	if input.KeyCode == Enum.KeyCode.M then
-		uiVisible = not uiVisible
-		screenGui.Enabled = uiVisible
-	end
-end)
-
---// ATTRIBUTE TOGGLE UI
-local function createGunToggleRow(labelText, defaultState, callback)
-    local rowFrame = Instance.new("Frame")
-    rowFrame.Size = UDim2.new(0, 180, 0, 30)
-    rowFrame.BackgroundTransparency = 1
-
-    local label = Instance.new("TextLabel", rowFrame)
-    label.Size = UDim2.new(0, 120, 1, 0)
-    label.Position = UDim2.new(0, 0, 0, 0)
-    label.Text = labelText
-    label.BackgroundTransparency = 1
-    label.TextColor3 = Color3.new(1, 1, 1)
-    label.Font = Enum.Font.SourceSans
-    label.TextSize = 11
-    label.TextXAlignment = Enum.TextXAlignment.Left
-
-    local toggleButton = Instance.new("TextButton", rowFrame)
-    toggleButton.Size = UDim2.new(0, 25, 0, 25)
-    toggleButton.Position = UDim2.new(1, -80, 0.5, -20)
-    styleButton(toggleButton)
-    toggleButton.TextSize = 20
-    toggleButton.Text = ""  -- Start with empty text
-
-    local state = defaultState
-    toggleButton.MouseButton1Click:Connect(function()
-        state = not state
-        toggleButton.Text = state and "" or "●"  -- Toggle between empty and filled circle
-        callback(state)
-        LocalPlayer:SetAttribute(labelText .. "Enabled", state)
+    closeBtn.MouseButton1Click:Connect(function()
+        frame:Destroy()
+        activeBackpackUI = nil
     end)
 
-    LocalPlayer:SetAttribute(labelText .. "Enabled", defaultState)
+    local container = Instance.new("ScrollingFrame", frame)
+    container.Size = UDim2.new(1, -20, 1, -46)
+    container.Position = UDim2.new(0, 10, 0, 46)
+    container.BackgroundTransparency = 1
+    container.BorderSizePixel = 0
+    container.ScrollBarThickness = 0
+    container.CanvasSize = UDim2.new(0, 0, 0, 5 * 32)
 
-    return rowFrame
+    local itemLayout = Instance.new("UIListLayout", container)
+    itemLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    itemLayout.Padding = UDim.new(0, 6)
+
+    local backpack = player:FindFirstChild("Backpack")
+    if backpack then
+        local idx = 0
+        for _, item in ipairs(backpack:GetChildren()) do
+            if item:IsA("Tool") and item.Name ~= "Fists" then
+                idx += 1
+                if idx > 5 then break end
+                local lblFrame = Instance.new("Frame", container)
+                lblFrame.Size = UDim2.new(1, 0, 0, 20)
+                lblFrame.BackgroundColor3 = Color3.fromRGB(75, 75, 75)
+                lblFrame.BorderSizePixel = 0
+
+                local lblCorner = Instance.new("UICorner", lblFrame)
+                lblCorner.CornerRadius = UDim.new(0, 8)
+
+                local lbl = Instance.new("TextLabel", lblFrame)
+                lbl.Size = UDim2.new(1, -12, 1, 0)
+                lbl.Position = UDim2.new(0, 6, 0, 0)
+                lbl.BackgroundTransparency = 1
+                lbl.TextColor3 = Color3.fromRGB(245, 245, 245)
+                lbl.Font = Enum.Font.SourceSans
+                lbl.TextSize = 14
+
+                local emoji = emojiMap[item.Name] or "🔹"
+                lbl.Text = emoji .. " " .. item.Name
+                lbl.TextXAlignment = Enum.TextXAlignment.Left
+            end
+        end
+    end
+
+    activeBackpackUI = frame
 end
 
--- Gun Toggles
-local recoilState = LocalPlayer:GetAttribute("RecoilEnabled") or true
-local reloadState = LocalPlayer:GetAttribute("ReloadEnabled") or true
+-- Toggle minimize / restore
+local function toggleMinimize()
+    isMinimized = not isMinimized
+    mainFrame.Visible = not isMinimized
 
-local function setGunAttribute(attrName, value)
-	task.spawn(function()
-		local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-		local tool
-		for i = 1, 30 do
-			tool = char:FindFirstChildOfClass("Tool")
-			if tool then break end
-			task.wait(0.1)
-		end
-		if tool and tool:GetAttribute(attrName) ~= nil then
-			tool:SetAttribute(attrName, value)
-		end
-	end)
-end
+    if isMinimized then
+        if not miniFrame then
+            miniFrame = Instance.new("TextButton", screenGui)
+            miniFrame.Name = "MiniToggle"
+            miniFrame.Size = UDim2.new(0, 60, 0, 30)
+            miniFrame.Position = UDim2.new(0, 100, 0, 20)
+            miniFrame.BackgroundColor3 = Color3.fromRGB(65, 65, 65)
+            miniFrame.BorderSizePixel = 0
+            miniFrame.Text = "🎒"
+            miniFrame.TextColor3 = Color3.fromRGB(240, 240, 240)
+            miniFrame.Font = Enum.Font.SourceSansBold
+            miniFrame.TextSize = 18
 
-local recoilRow = createGunToggleRow("Recoil", recoilState, function(state)
-	setGunAttribute("Recoil", state and 1 or 0)
-end)
-recoilRow.Position = UDim2.new(0, 10, 0, 70)
-recoilRow.Parent = frame
+            local miniCorner = Instance.new("UICorner", miniFrame)
+            miniCorner.CornerRadius = UDim.new(0, 8)
 
-local reloadRow = createGunToggleRow("Reload", reloadState, function(state)
-	setGunAttribute("ReloadTime", state and 2 or 0)
-end)
-reloadRow.Position = UDim2.new(0, 10, 0, 105)
-reloadRow.Parent = frame
-
--- ESP Toggle Row
-local espBoxes = {}
-local nameTags = {}
-local espState = LocalPlayer:GetAttribute("ESPEnabled") or false  -- Make sure it starts as false by default
-
-local function CreateESP(player)
-    if player == LocalPlayer or espBoxes[player] or not player.Character then return end
-
-    -- Create highlight for ESP
-    local highlight = Instance.new("Highlight")
-    highlight.FillColor = Color3.fromRGB(255, 0, 0)
-    highlight.OutlineColor = Color3.fromRGB(255, 0, 0)
-    highlight.FillTransparency = 0.5
-    highlight.OutlineTransparency = 0
-    highlight.Adornee = player.Character
-    highlight.Parent = player.Character
-    espBoxes[player] = highlight
-
-    -- Create name tag above player
-    local head = player.Character:FindFirstChild("Head")
-    if head then
-        local billboard = Instance.new("BillboardGui")
-        billboard.Name = "ESP_NameTag"
-        billboard.Adornee = head
-        billboard.Size = UDim2.new(0, 200, 0, 50)
-        billboard.StudsOffset = Vector3.new(0, 2, 0)
-        billboard.AlwaysOnTop = true
-        billboard.Parent = head
-
-        local label = Instance.new("TextLabel")
-        label.Size = UDim2.new(1, 0, 1, 0)
-        label.BackgroundTransparency = 1
-        label.Text = player.Name
-        label.TextColor3 = Color3.fromRGB(255, 255, 0)
-        label.TextSize = 12
-        label.Font = Enum.Font.GothamSemibold
-        label.TextStrokeTransparency = 0.6
-        label.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-        label.Parent = billboard
-
-        nameTags[player] = billboard
+            miniFrame.MouseButton1Click:Connect(toggleMinimize)
+        end
+        miniFrame.Visible = true
+    else
+        if miniFrame then
+            miniFrame.Visible = false
+        end
     end
 end
 
-local function RemoveESP(player)
-    if espBoxes[player] then
-        espBoxes[player]:Destroy()
-        espBoxes[player] = nil
-    end
-    if nameTags[player] then
-        nameTags[player]:Destroy()
-        nameTags[player] = nil
-    end
-end
+-- Create minimize button in mainFrame
+local minimizeBtn = Instance.new("TextButton", mainFrame)
+minimizeBtn.Name = "MinimizeBtn"
+minimizeBtn.Size = UDim2.new(0, 28, 0, 24)
+minimizeBtn.Position = UDim2.new(0, 4, 0, 4)
+minimizeBtn.BackgroundColor3 = Color3.fromRGB(100, 100, 255)
+minimizeBtn.BorderSizePixel = 0
+minimizeBtn.Text = "—"
+minimizeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+minimizeBtn.Font = Enum.Font.SourceSansBold
+minimizeBtn.TextSize = 20
 
-local function setESPEnabled(state)
-    LocalPlayer:SetAttribute("ESPEnabled", state)
+local minimizeCorner = Instance.new("UICorner", minimizeBtn)
+minimizeCorner.CornerRadius = UDim.new(0, 6)
 
+minimizeBtn.MouseButton1Click:Connect(toggleMinimize)
+
+-- Update function with debounce
+local function tryUpdatePlayerList()
+    local now = tick()
+    if now - lastUpdateTime < UPDATE_INTERVAL then
+        return
+    end
+    lastUpdateTime = now
+
+    -- Clear old buttons
+    for _, child in ipairs(listFrame:GetChildren()) do
+        if child:IsA("TextButton") and child ~= minimizeBtn then
+            child:Destroy()
+        end
+    end
+
+    -- Create new buttons
     for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer then
-            if state then
-                CreateESP(player)
-            else
-                RemoveESP(player)
-            end
+        local backpack = player:FindFirstChild("Backpack")
+        if backpack then
+            local btn = Instance.new("TextButton", listFrame)
+            btn.Size = UDim2.new(1, -20, 0, 26)
+            btn.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
+            btn.BorderSizePixel = 0
+            btn.AutoButtonColor = true
+            btn.TextColor3 = Color3.fromRGB(235, 235, 235)
+            btn.Font = Enum.Font.SourceSansBold
+            btn.TextSize = 10
+            btn.Text = player.Name .. " (" .. countBackpackItems(backpack) .. ")"
+
+            local btnCorner = Instance.new("UICorner", btn)
+            btnCorner.CornerRadius = UDim.new(0, 8)
+
+            btn.MouseButton1Click:Connect(function()
+                showBackpack(player)
+            end)
+
+            backpack.ChildAdded:Connect(tryUpdatePlayerList)
+            backpack.ChildRemoved:Connect(tryUpdatePlayerList)
+            player.CharacterAdded:Connect(function(char)
+                local humanoid = char:WaitForChild("Humanoid", 5)
+                if humanoid then
+                    humanoid.Died:Connect(function()
+                        player.CharacterAdded:Wait()
+                        tryUpdatePlayerList()
+                    end)
+                end
+            end)
         end
     end
+
+    listFrame.CanvasSize = UDim2.new(0, 0, 0, listLayout.AbsoluteContentSize.Y + 12)
 end
 
--- Create the ESP toggle row
-local espRow = createGunToggleRow("ESP", espState, setESPEnabled)
-espRow.Position = UDim2.new(0, 10, 0, 140)
-espRow.Parent = frame
+-- Connect player events
+Players.PlayerAdded:Connect(tryUpdatePlayerList)
+Players.PlayerRemoving:Connect(tryUpdatePlayerList)
 
--- Update when a new player joins
-Players.PlayerAdded:Connect(function(player)
-    player.CharacterAdded:Connect(function()
-        if LocalPlayer:GetAttribute("ESPEnabled") then
-            task.wait(1)
-            CreateESP(player)
+-- Initial update
+tryUpdatePlayerList()
+
+-- Keyboard controls
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.KeyCode == Enum.KeyCode.M then
+        mainFrame.Visible = not mainFrame.Visible
+        if activeBackpackUI then
+            activeBackpackUI.Visible = mainFrame.Visible
         end
-    end)
-end)
-
--- Remove ESP when a player leaves
-Players.PlayerRemoving:Connect(RemoveESP)
-
---// Toggle ESP UI with N key
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if gameProcessed then return end
-    if input.KeyCode == Enum.KeyCode.N then
-        espState = not espState
-        setESPEnabled(espState)
-        
-        -- Update the ESP button to show "●" or empty text
-        espRow:FindFirstChildOfClass("TextButton").Text = espState and "●" or ""
-    end
-end)
-
---// Close the script when the "Delete" key is pressed
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if gameProcessed then return end
-    if input.KeyCode == Enum.KeyCode.Delete then
-        -- Disable the entire script
+    elseif input.KeyCode == Enum.KeyCode.Delete then
         screenGui:Destroy()
-        fovCircle:Remove()
+        script:Destroy()
     end
 end)
 
-
-
-local toggleImageBtn = Instance.new("ImageButton", screenGui)
-toggleImageBtn.Size = UDim2.new(0, 30, 0, 30)  -- ขนาดเหมือนเดิม
-toggleImageBtn.Position = UDim2.new(0, 20, 0, 20)  -- ตำแหน่งเหมือนเดิม
-toggleImageBtn.Image = "rbxassetid://118284077656202"  -- ใช้ Asset ID ที่คุณอัปโหลด
-toggleImageBtn.BackgroundTransparency = 1  -- ลบพื้นหลังออก
-
--- เอาความโปร่งใสออกจากรูปภาพ
-toggleImageBtn.ImageTransparency = 0  -- 0 คือไม่โปร่งใส
-
--- เพิ่มกรอบสีดำรอบรูปภาพ
-toggleImageBtn.BorderSizePixel = 2  -- ขนาดของกรอบ
-toggleImageBtn.BorderColor3 = Color3.fromRGB(0, 0, 0)  -- สีกรอบเป็นสีดำ
-
--- เพิ่มขอบโค้งให้กับปุ่ม
-local corner = Instance.new("UICorner", toggleImageBtn)
-corner.CornerRadius = UDim.new(0, 6)  -- ขอบโค้ง
-
--- ตัวแปรเพื่อเก็บสถานะการแสดงผลของ UI
-local uiVisible = true
-
--- ฟังก์ชั่นที่ทำให้ UI ซ่อนและแสดง
-local function toggleUI()
-    uiVisible = not uiVisible
-    frame.Visible = uiVisible  -- ซ่อนหรือแสดง UI หลัก
-    newFrame.Visible = uiVisible  -- ซ่อนหรือแสดง UI ใหม่
-end
-
--- เชื่อมโยงฟังก์ชั่นกับการกดปุ่มภาพ
-toggleImageBtn.MouseButton1Click:Connect(toggleUI)
-
-
-local function scaleUI(parent, scale)
-    -- ย่อ parent ก่อน
-    if parent:IsA("Frame") or parent:IsA("TextButton") or parent:IsA("TextLabel") or parent:IsA("ImageButton") then
-        parent.Size = UDim2.new(
-            parent.Size.X.Scale,
-            parent.Size.X.Offset * scale,
-            parent.Size.Y.Scale,
-            parent.Size.Y.Offset * scale
-        )
-        parent.Position = UDim2.new(
-            parent.Position.X.Scale,
-            parent.Position.X.Offset * scale,
-            parent.Position.Y.Scale,
-            parent.Position.Y.Offset * scale
-        )
-        if parent:IsA("TextLabel") or parent:IsA("TextButton") then
-            parent.TextSize = parent.TextSize * scale
-        end
-    end
-
-    -- แล้วย่อ descendants ต่อ
-    for _, child in ipairs(parent:GetDescendants()) do
-        if child:IsA("Frame") or child:IsA("TextButton") or child:IsA("TextLabel") or child:IsA("ImageButton") then
-            child.Size = UDim2.new(
-                child.Size.X.Scale,
-                child.Size.X.Offset * scale,
-                child.Size.Y.Scale,
-                child.Size.Y.Offset * scale
-            )
-            child.Position = UDim2.new(
-                child.Position.X.Scale,
-                child.Position.X.Offset * scale,
-                child.Position.Y.Scale,
-                child.Position.Y.Offset * scale
-            )
-            if child:IsA("TextLabel") or child:IsA("TextButton") then
-                child.TextSize = child.TextSize * scale
-            end
-        end
-    end
-end
-
-
--- แล้วค่อยเรียก
-scaleUI(frame, 0.5)
