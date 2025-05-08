@@ -94,7 +94,7 @@ minusBtn.MouseButton1Click:Connect(function()
 end)
 
 --// MAIN LOOP
-local function getClosestVisiblePlayer()
+local function getClosestEnemy()
     local closestPlayer = nil
     local shortestDistance = fovRadius
     local center = Vector2.new(camera.ViewportSize.X/2, camera.ViewportSize.Y/2)
@@ -122,20 +122,115 @@ local function getClosestVisiblePlayer()
     return nil
 end
 
+local function getClosestEnemyHead()
+    local closest = nil
+    local shortest = math.huge
+    local center = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("Head") then
+            local head = player.Character.Head
+            local screenPos, onScreen = camera:WorldToViewportPoint(head.Position)
+            if onScreen then
+                local distance = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
+                if distance < fovRadius and distance < shortest then  -- ตรวจสอบว่าอยู่ภายในวง FOV
+                    shortest = distance
+                    closest = head
+                end
+            end
+        end
+    end
+
+    return closest
+end
+
 --// OVERRIDE GUN SYSTEM
 local GunModule = require(game:GetService("ReplicatedStorage").Modules.Game.ItemTypes.Gun)
 local OriginalCalculateBullet = GunModule.calculate_bullet_direction
 
 GunModule.calculate_bullet_direction = function(self, lookVector)
     if fovEnabled then
-        local target = getClosestVisiblePlayer()
+        local target = getClosestEnemyHead()
         if target then
-            local gunPosition = camera.CFrame.Position
-            return (target.Position - gunPosition).Unit
+            local origin = camera.CFrame.Position
+            local targetPos = target.Position
+            local targetVel = target.Velocity
+            local bulletSpeed = 9999 -- หรือดึงจาก tool:GetAttribute("BulletSpeed")
+
+            local distance = (targetPos - origin).Magnitude
+            local timeToTarget = distance / bulletSpeed
+            local predictedPosition = targetPos + targetVel * timeToTarget
+
+            return (predictedPosition - origin).Unit
         end
     end
     return OriginalCalculateBullet(self, lookVector)
 end
+
+
+-- OVERRIDE calculate_bullet_direction
+local OriginalCalculateBullet = GunModule.calculate_bullet_direction
+GunModule.calculate_bullet_direction = function(self, lookVector)
+    if fovEnabled then
+        local target = getClosestEnemyHead()
+        if target then
+            return (target.Position - camera.CFrame.Position).Unit
+        end
+    end
+    return OriginalCalculateBullet(self, lookVector)
+end
+
+-- OVERRIDE gunshot FOR INSTANT HIT
+local OriginalGunshot = GunModule.gunshot
+
+GunModule.gunshot = function(tool, hitPos, normal, part)
+    if fovEnabled then
+        local target = getClosestEnemyHead()
+        if target then
+            local normalVec = Vector3.new(0, 1, 0)
+            local dummyPart = target
+
+            print("[INSTANT HIT] Triple shot at:", target.Parent.Name)
+
+            for i = 1, 3 do
+                task.delay((i - 1) * 0.05, function()
+                    -- Offset เล็กน้อยเพื่อหลอกว่าเป็นกระสุนคนละนัด
+                    local offset = Vector3.new(
+                        math.random(-2, 2) * 0.90,
+                        math.random(-2, 2) * 0.70,
+                        math.random(-2, 2) * 1
+                    )
+                    local hitPosition = target.Position + offset
+
+                    if i == 1 then
+                        -- นัดแรก: ยิงปกติ เห็นเส้นกระสุน
+                        OriginalGunshot(tool, hitPosition, normalVec, dummyPart)
+                    else
+                        -- นัดที่ 2-3: ยิงเงียบๆ ไม่มีเอฟเฟกต์
+                        local gunData = require(ReplicatedStorage.Modules.Game.ItemTypes.Gun)[tool.Name]
+                        Net.send("shoot_gun", tool, Camera.CFrame, { {
+                            Instance = dummyPart,
+                            Position = hitPosition,
+                            Normal = normalVec,
+                        } })
+
+                        -- ยิงเสียง (optional)
+                        if gunData and gunData.FireSound then
+                            local sound = tool:FindFirstChild(gunData.FireSound)
+                            if sound then sound:Play() end
+                        end
+                    end
+                end)
+            end
+            return
+        end
+    end
+
+    -- ยิงปกติถ้าไม่ lock
+    OriginalGunshot(tool, hitPos, normal, part)
+end
+
+
 
 --// MAIN LOOP
 RunService.RenderStepped:Connect(function()
@@ -144,24 +239,24 @@ RunService.RenderStepped:Connect(function()
     fovCircle.Radius = fovRadius
 end)
 
-
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-	if gameProcessed then return end
-	if input.KeyCode == Enum.KeyCode.B then
-		fovEnabled = not fovEnabled
-		toggleBtn.Text = fovEnabled and "FOV: ON" or "FOV: OFF"
-		fovCircle.Visible = fovEnabled
-	end
-end)
-
---// UI Toggle
-local uiVisible = true
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-	if gameProcessed then return end
-	if input.KeyCode == Enum.KeyCode.M then
-		uiVisible = not uiVisible
-		screenGui.Enabled = uiVisible
-	end
+-- Instant Bullet System Loop
+task.spawn(function()
+    while true do
+        if fovEnabled then
+            GunModule.calculate_bullet_direction = function(self, lookVector)
+                local target = getClosestEnemyHead()
+                if target then
+                    local origin = camera.CFrame.Position
+                    print("[INSTANT BULLET] Locking onto:", target.Parent.Name)
+                    return (target.Position - origin).Unit
+                end
+                return lookVector
+            end
+        else
+            GunModule.calculate_bullet_direction = OriginalCalculateBullet
+        end
+        task.wait(0.2)
+    end
 end)
 
 --// ATTRIBUTE TOGGLE UI
@@ -231,6 +326,7 @@ end)
 reloadRow.Position = UDim2.new(0, 10, 0, 105)
 reloadRow.Parent = frame
 
+
 -- ESP Toggle Row
 local espBoxes = {}
 local nameTags = {}
@@ -286,14 +382,48 @@ local function RemoveESP(player)
     end
 end
 
+local espLoopActive = false
+local espLoopThread = nil
+
 local function setESPEnabled(state)
     LocalPlayer:SetAttribute("ESPEnabled", state)
 
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer then
-            if state then
-                CreateESP(player)
-            else
+    if state then
+        espLoopActive = true
+        print("[ESP] เปิดใช้งาน ESP")
+        if not espLoopThread then
+            espLoopThread = task.spawn(function()
+                print("[ESP] เริ่มลูป ESP แล้ว")
+
+                while espLoopActive do
+                    print("[ESP] ลูปล่าสุด: ตรวจสอบผู้เล่น...")
+                    for _, player in ipairs(Players:GetPlayers()) do
+                        if player ~= LocalPlayer then
+                            local char = player.Character
+                            if char then
+                                if not espBoxes[player] then
+                                    print("[ESP] สร้าง ESP ให้กับ:", player.Name)
+                                    CreateESP(player)
+                                elseif espBoxes[player].Adornee ~= char then
+                                    print("[ESP] รีเซ็ต ESP ให้กับ:", player.Name)
+                                    RemoveESP(player)
+                                    CreateESP(player)
+                                end
+                            end
+                        end
+                    end
+                    task.wait(1)
+                end
+
+                print("[ESP] หยุดลูป ESP แล้ว")
+                espLoopThread = nil
+            end)
+        end
+    else
+        espLoopActive = false
+        print("[ESP] ปิดใช้งาน ESP - ลบ ESP ทั้งหมด")
+        for _, player in pairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer then
                 RemoveESP(player)
             end
         end
@@ -319,58 +449,231 @@ end)
 Players.PlayerRemoving:Connect(RemoveESP)
 
 --// Toggle ESP UI with N key
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if gameProcessed then return end
-    if input.KeyCode == Enum.KeyCode.N then
-        espState = not espState
-        setESPEnabled(espState)
-        
-        -- Update the ESP button to show "●" or empty text
-        espRow:FindFirstChildOfClass("TextButton").Text = espState and "●" or ""
-    end
+espRow.Position = UDim2.new(0, 10, 0, 140)
+espRow.Parent = frame
+
+task.spawn(function()
+	while true do
+		local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+		local tool = char:FindFirstChildOfClass("Tool")
+
+		if tool then
+			pcall(function()
+				-- ✅ Force BulletSpeed (ทำให้กระสุนเร็วสุด)
+				if tool:GetAttribute("BulletSpeed") == nil or tool:GetAttribute("BulletSpeed") < 9999 then
+					tool:SetAttribute("BulletSpeed", 9999)
+					print("[FORCE] BulletSpeed set to 9999 for", tool.Name)
+				end
+
+				-- ✅ Force ReloadTime (ยิงได้ต่อเนื่อง)
+				if LocalPlayer:GetAttribute("ReloadEnabled") == false then
+                    if tool:GetAttribute("ReloadTime") ~= 0 then
+                        tool:SetAttribute("ReloadTime", 0)
+                    end
+                end
+
+				-- ✅ Force Recoil (ไม่มีเด้ง)
+				if LocalPlayer:GetAttribute("RecoilEnabled") == false then
+                    if tool:GetAttribute("Recoil") ~= 0 then
+                        tool:SetAttribute("Recoil", 0)
+                    end
+                end
+
+				-- ✅ Force Range และ MaxDistance (ยิงได้ไกลมาก)
+				if tool:GetAttribute("Range") ~= 9999 then
+					tool:SetAttribute("Range", 9999)
+					print("[FORCE] Range set to 9999 for", tool.Name)
+				end
+				if tool:GetAttribute("MaxDistance") ~= 9999 then
+					tool:SetAttribute("MaxDistance", 9999)
+					print("[FORCE] MaxDistance set to 9999 for", tool.Name)
+				end
+			end)
+		end
+
+		task.wait(0.5) -- ตรวจสอบทุกครึ่งวินาที
+	end
 end)
 
---// Close the script when the "Delete" key is pressed
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if gameProcessed then return end
-    if input.KeyCode == Enum.KeyCode.Delete then
-        -- Disable the entire script
-        screenGui:Destroy()
-        fovCircle:Remove()
+
+
+local function toggleGunRowState(attrName)
+    local currentState = LocalPlayer:GetAttribute(attrName .. "Enabled")
+    local newState = not currentState
+    LocalPlayer:SetAttribute(attrName .. "Enabled", newState)
+
+    -- เรียก callback ของ toggle จริง
+    if attrName == "ESP" then
+        setESPEnabled(newState)
+    elseif attrName == "Recoil" then
+        setGunAttribute("Recoil", newState and 1 or 0)
+    elseif attrName == "Reload" then
+        setGunAttribute("ReloadTime", newState and 2 or 0)
     end
-end)
 
-
-
-local toggleImageBtn = Instance.new("ImageButton", screenGui)
-toggleImageBtn.Size = UDim2.new(0, 30, 0, 30)  -- ขนาดเหมือนเดิม
-toggleImageBtn.Position = UDim2.new(0, 20, 0, 20)  -- ตำแหน่งเหมือนเดิม
-toggleImageBtn.Image = "rbxassetid://118284077656202"  -- ใช้ Asset ID ที่คุณอัปโหลด
-toggleImageBtn.BackgroundTransparency = 1  -- ลบพื้นหลังออก
-
--- เอาความโปร่งใสออกจากรูปภาพ
-toggleImageBtn.ImageTransparency = 0  -- 0 คือไม่โปร่งใส
-
--- เพิ่มกรอบสีดำรอบรูปภาพ
-toggleImageBtn.BorderSizePixel = 2  -- ขนาดของกรอบ
-toggleImageBtn.BorderColor3 = Color3.fromRGB(0, 0, 0)  -- สีกรอบเป็นสีดำ
-
--- เพิ่มขอบโค้งให้กับปุ่ม
-local corner = Instance.new("UICorner", toggleImageBtn)
-corner.CornerRadius = UDim.new(0, 6)  -- ขอบโค้ง
-
--- ตัวแปรเพื่อเก็บสถานะการแสดงผลของ UI
-local uiVisible = true
-
--- ฟังก์ชั่นที่ทำให้ UI ซ่อนและแสดง
-local function toggleUI()
-    uiVisible = not uiVisible
-    frame.Visible = uiVisible  -- ซ่อนหรือแสดง UI หลัก
-    newFrame.Visible = uiVisible  -- ซ่อนหรือแสดง UI ใหม่
+    -- อัปเดตปุ่ม UI
+    for _, child in ipairs(frame:GetChildren()) do
+        if child:IsA("Frame") and child:FindFirstChildWhichIsA("TextButton") then
+            local label = child:FindFirstChildWhichIsA("TextLabel")
+            local btn = child:FindFirstChildWhichIsA("TextButton")
+            if label and label.Text == attrName then
+                btn.Text = newState and "●" or ""  -- Update button text for ESP, Recoil, Reload
+            end
+        end
+    end
 end
 
--- เชื่อมโยงฟังก์ชั่นกับการกดปุ่มภาพ
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+
+    local key = input.KeyCode
+
+    if key == Enum.KeyCode.Delete then
+        screenGui:Destroy()
+        fovCircle:Remove()
+
+    elseif key == Enum.KeyCode.N then
+        toggleGunRowState("ESP")  -- เรียกใช้งาน toggleGunRowState ที่นี่
+
+    elseif key == Enum.KeyCode.M then
+        screenGui.Enabled = not screenGui.Enabled
+
+    elseif key == Enum.KeyCode.B then
+        fovEnabled = not fovEnabled
+        toggleBtn.Text = fovEnabled and "FOV: ON" or "FOV: OFF"
+        fovCircle.Visible = fovEnabled
+    end
+end) 
+
+
+-- Define variables for the ReplicatedStorage modules
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RagdollModule = require(ReplicatedStorage.Modules.Game.Ragdoll)
+
+-- Set up a function to log info in the output window (F9)
+local function logInfo(message)
+    print("[Ragdoll Hack] " .. message)
+end
+
+local function getRandomDirection()
+    -- Randomly generate a force vector in 3D space (X, Y, Z)
+    -- แบบหมุนกระเด็นเวียนๆ
+    local angle = math.rad(math.random(0, 360))
+    local forceMagnitude = 400
+    local randomX = math.cos(angle) * forceMagnitude
+    local randomZ = math.sin(angle) * forceMagnitude
+    local randomY = math.random(10, 60)
+
+    -- Create a Vector3 with the random values
+    return Vector3.new(randomX, randomY, randomZ)
+end
+
+-- Variable to track whether the auto-ragdoll is enabled or disabled
+local isAutoRagdollEnabled = false
+local isRagdollActive = false  -- Track whether the ragdoll feature is currently active
+
+-- Function to perform Hyper-Ragdoll Kill
+local function hyperRagdollKill()
+    -- Find all characters in the game
+    local characters = game:GetService("Players"):GetPlayers()
+    for _, player in ipairs(characters) do
+        -- Ensure the player isn't yourself
+        if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+            local humanoidRoot = player.Character.HumanoidRootPart
+            -- Apply a random force vector (with higher force for faster movement)
+            local randomForce = getRandomDirection()
+            humanoidRoot:ApplyImpulse(randomForce)
+            
+            -- Log the action to the output
+            logInfo("Hyper-Ragdoll Kill executed on " .. player.Name)
+        end
+    end
+end
+
+-- Function to check player health and enable/disable auto ragdoll based on health
+local function checkPlayerHealthAndToggleAuto(player)
+    local health = player.Character and player.Character:FindFirstChild("Humanoid") and player.Character.Humanoid.Health
+
+    if health and health < 35 then
+        if not isAutoRagdollEnabled then
+            logInfo(player.Name .. "'s health is low (" .. health .. "), enabling auto ragdoll.")
+            isAutoRagdollEnabled = true
+            -- When health is low, start ragdolling immediately
+            hyperRagdollKill()
+        end
+    elseif health and health >= 35 then
+        if isAutoRagdollEnabled then
+            logInfo(player.Name .. "'s health is sufficient (" .. health .. "), disabling auto ragdoll.")
+            isAutoRagdollEnabled = false
+        end
+    end
+end
+
+-- Monitor health continuously while auto ragdoll is enabled
+local function monitorAutoRagdoll()
+    while true do
+        -- Get the player in question (you can change this to any specific player)
+        local player = game:GetService("Players").LocalPlayer
+        if player and player.Character and player.Character:FindFirstChild("Humanoid") then
+            local humanoid = player.Character.Humanoid
+            -- If the player's health goes below 30, continue triggering hyper ragdoll
+            if humanoid.Health < 35 then
+                -- Perform hyper ragdoll kill every 1 second
+                hyperRagdollKill()
+            end
+        end
+        wait(0.01)  -- Increase the frequency of the check to 0.5 second for faster action
+    end
+end
+
+-- Informing the user in the F9 output about what the button does
+logInfo("Auto Hyper-Ragdoll จะทำงานทันทีเมื่อโหลดสคริปต์ และจะตรวจสอบเลือดตลอดเวลา...")
+
+-- Start monitoring health immediately when the script is loaded
+task.spawn(monitorAutoRagdoll)
+
+-- Optionally, if you still want to disable the feature with the 'Delete' key
+game:GetService("UserInputService").InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.KeyCode == Enum.KeyCode.Delete then
+        -- Disable the feature
+        logInfo("Hyper-Ragdoll Kill feature is now disabled.")
+        isAutoRagdollEnabled = false
+        isRagdollActive = false
+    end
+end)
+
+
+-- ปุ่มรูปภาพที่ใช้สำหรับซ่อน/แสดง UI
+local toggleImageBtn = Instance.new("ImageButton", screenGui)
+toggleImageBtn.Size = UDim2.new(0, 30, 0, 30)
+toggleImageBtn.Position = UDim2.new(0, 20, 0, 20)
+toggleImageBtn.Image = "rbxassetid://118284077656202"
+toggleImageBtn.BackgroundTransparency = 1
+toggleImageBtn.ImageTransparency = 0
+toggleImageBtn.BorderSizePixel = 2
+toggleImageBtn.BorderColor3 = Color3.fromRGB(0, 0, 0)
+
+local corner = Instance.new("UICorner", toggleImageBtn)
+corner.CornerRadius = UDim.new(0, 6)
+
+local newCorner = Instance.new("UICorner", newFrame)
+newCorner.CornerRadius = UDim.new(0, 8)
+
+-- ตัวแปรควบคุมการแสดงผลของ UI
+local uiVisible = true
+
+-- ฟังก์ชันสลับการแสดงผลของ UI หลักและ newFrame
+local function toggleUI()
+    uiVisible = not uiVisible
+    frame.Visible = uiVisible
+    newFrame.Visible = uiVisible
+end
+
+-- เชื่อมปุ่มรูปภาพกับการสลับ UI
 toggleImageBtn.MouseButton1Click:Connect(toggleUI)
+
 
 
 local function scaleUI(parent, scale)
